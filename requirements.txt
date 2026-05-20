@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+streamlit
+baidu-aip
+python-docx
+PyPDF2
+requests
+python-multipart
+python-dotenv
+pandas
