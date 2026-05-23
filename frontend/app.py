@@ -147,16 +147,18 @@ def fetch_employees(archive_id):
 def fetch_employee_detail(employee_id):
     """
     获取单个员工完整详情信息
-    本地模拟版：使用内置模拟数据
-    TODO: 接入后端后改为 GET /api/employees/{employee_id}
     """
-    # 模拟员工详细信息
+    # 优先从保存的详情中获取
+    if "employees_details" in st.session_state and employee_id in st.session_state.employees_details:
+        return st.session_state.employees_details[employee_id]
+    
+    # 模拟员工详细信息（备用）
     mock_details = {
         1: {"姓名": "张三", "身份证号": "110101199001012345", "性别": "男", "民族": "汉",
             "出生日期": "1990-05-15", "住址": "北京市海淀区中关村南大街5号",
-            "手机号": "1386789", "入职日期": "2025-01-15", "部门": "技术部", "职位": "高级工程师"},
+            "手机号": "13812345678", "入职日期": "2025-01-15", "部门": "技术部", "职位": "高级工程师"},
         2: {"姓名": "李四", "身份证号": "310101199508211234", "性别": "女", "民族": "汉",
-            "出生日期": "1995-08-21", "住址": "", "手机号": "1391234",
+            "出生日期": "1995-08-21", "住址": "上海市浦东新区", "手机号": "13912345678",
             "入职日期": "2025-03-01", "部门": "产品部", "职位": "产品经理"},
         3: {"姓名": "王五", "身份证号": "440101199212011234", "性别": "男", "民族": "汉",
             "出生日期": "1992-12-01", "住址": "广东省广州市天河区", "手机号": "",
@@ -172,19 +174,47 @@ def fetch_employee_detail(employee_id):
 def save_employee(employee_id, data):
     """
     保存编辑后的员工信息
-    本地模拟版：直接返回成功
-    TODO: 接入后端后改为 PUT /api/employees/{employee_id}
     """
+    if "employees_details" not in st.session_state:
+        st.session_state.employees_details = {}
+    st.session_state.employees_details[employee_id] = data
     return True
 
 
-def export_employee_archive(employee_id):
+def export_employee_archive(employee_id, employee_data):
     """
-    模拟导出员工档案为 Word
-    本地版：返回 None，前端提示生成成功
-    TODO: 接入后端后改为 GET /api/employees/{id}/export 获取文件流
+    调用后端生成 Word 档案
     """
-    return None
+    import requests
+    
+    backend_url = st.session_state.get("backend_url", "http://localhost:8000")
+    
+    # 构建后端期望的请求体
+    payload = {
+        "name": employee_data.get("姓名"),
+        "gender": employee_data.get("性别"),
+        "id_card": employee_data.get("身份证号"),
+        "birth_date": employee_data.get("出生日期"),
+        "phone": employee_data.get("手机号"),
+        # ... 其他字段
+    }
+    
+    try:
+        response = requests.post(
+            f"{backend_url}/archive/generate",
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            return response.content  # 返回 Word 文件二进制内容
+        else:
+            st.error(f"导出失败：{response.status_code}")
+            return None
+            
+    except Exception as e:
+        st.error(f"导出失败：{e}")
+        return None
 
 # ============================================================
 # 模拟 OCR 识别函数
@@ -193,23 +223,50 @@ def export_employee_archive(employee_id):
 # ============================================================
 def mock_ocr_recognize(uploaded_file):
     """
-    模拟文件 OCR 识别
-    输入：上传的图片/PDF/Word
-    输出：结构化员工信息
+    调用真实后端 OCR 接口识别文件
     """
-    time.sleep(1.5)
-    return {
-        "姓名": "赵六",
-        "身份证号": "330101199803211234",
-        "性别": "男",
-        "民族": "汉",
-        "出生日期": "1998-03-21",
-        "住址": "",
-        "手机号": "",
-        "入职日期": "",
-        "部门": "",
-        "职位": "",
-    }
+    import requests
+    
+    # 后端地址（与 backend_url 保持一致）
+    backend_url = st.session_state.get("backend_url", "http://localhost:8000")
+    
+    # 准备上传文件
+    files = {"file": uploaded_file.getvalue()}
+    
+    try:
+        response = requests.post(
+            f"{backend_url}/ocr/idcard",
+            files=files,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                ocr_data = result.get("data", {})
+                # 转换后端返回格式为前端期望的格式
+                return {
+                    "姓名": ocr_data.get("name"),
+                    "身份证号": ocr_data.get("id_card"),
+                    "性别": ocr_data.get("gender"),
+                    "民族": ocr_data.get("ethnicity"),
+                    "出生日期": ocr_data.get("birth_date"),
+                    "住址": ocr_data.get("address"),
+                    "手机号": ocr_data.get("phone"),
+                    "入职日期": "",
+                    "部门": "",
+                    "职位": "",
+                }
+            else:
+                st.error(f"识别失败：{result.get('error', '未知错误')}")
+                return None
+        else:
+            st.error(f"后端返回错误：{response.status_code}")
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        st.error("❌ 无法连接到后端服务，请确认 FastAPI 已启动")
+        return None
 
 # ============================================================
 # 页面 1：登录界面
@@ -577,6 +634,9 @@ def render_new_employee_flow(archive):
         if st.button("🔍 开始识别", type="primary", disabled=not can_recognize):
             with st.spinner("正在识别中，请稍候..."):
                 recognized = mock_ocr_recognize(st.session_state.new_employee_uploaded_file)
+            # 确保 recognized 不是 None
+            if recognized is None:
+                recognized = {}
             st.session_state.new_employee_recognized_data = recognized
             st.session_state.new_employee_stage = "confirm"
             st.rerun()
@@ -589,44 +649,80 @@ def render_new_employee_flow(archive):
         st.subheader("📋 确认员工信息")
         st.markdown("以下是自动识别的结果，请核对并补全缺失字段。")
 
+        # 获取数据，确保是字典
         data = st.session_state.new_employee_recognized_data
+        if data is None:
+            data = {}
+            st.session_state.new_employee_recognized_data = data
+
+        # 定义所有可能的字段
+        all_fields = [
+            "姓名", "身份证号", "性别", "民族", 
+            "出生日期", "住址", "手机号", 
+            "入职日期", "部门", "职位"
+        ]
+        
         completed_data = {}
-        for field, value in data.items():
-            col_label, col_input = st.columns([1, 3])
-            with col_label:
+        
+        # 创建两列布局，让界面更紧凑
+        col1, col2 = st.columns(2)
+        
+        for i, field in enumerate(all_fields):
+            # 交替放入左右两列
+            with col1 if i % 2 == 0 else col2:
+                # 获取当前值，如果是 None 或空字符串，显示为空
+                current_value = data.get(field, "")
+                if current_value is None:
+                    current_value = ""
+                
+                # 显示字段名和输入框
                 st.markdown(f"**{field}**")
-            with col_input:
-                if value == "":
-                    completed_data[field] = st.text_input(f"{field}（必填）", "", key=f"new_emp_{field}", placeholder="请输入...")
-                else:
-                    completed_data[field] = st.text_input(field, value, key=f"new_emp_{field}")
+                completed_data[field] = st.text_input(
+                    f"",  # 隐藏 label，因为上面已经写了
+                    value=current_value,
+                    key=f"new_emp_{field}",
+                    placeholder=f"请输入{field}"
+                )
+                st.markdown("---")  # 添加分隔线
 
         st.markdown("---")
         col_confirm, col_back, col_cancel = st.columns(3)
+        
         with col_confirm:
             if st.button("✅ 确认创建", type="primary", use_container_width=True):
-                empty_fields = [k for k, v in completed_data.items() if v.strip() == ""]
-                if empty_fields:
-                    st.warning(f"以下字段仍为空，但允许创建：{', '.join(empty_fields)}")
-
+                # 统计缺失字段（空字符串或 None）
+                missing_fields = [k for k, v in completed_data.items() if not v or v.strip() == ""]
+                
+                if missing_fields:
+                    st.warning(f"以下字段为空：{', '.join(missing_fields)}，创建后可以再次编辑补充")
+                
+                # 生成新员工 ID
                 new_id = st.session_state.next_employee_id
                 st.session_state.next_employee_id += 1
-
-                has_missing = any(v.strip() == "" for v in completed_data.values())
+                
+                # 判断是否有缺失字段
+                has_missing = any(not v or v.strip() == "" for v in completed_data.values())
                 status = "缺失" if has_missing else "完整"
-
+                
+                # 创建员工记录
                 new_employee = {
                     "id": new_id,
-                    "name": completed_data.get("姓名", "未知"),
+                    "name": completed_data.get("姓名", "未知") if completed_data.get("姓名") else "未知",
                     "status": status,
-                    "id_number": completed_data.get("身份证号", "")[:6] + "****"
+                    "id_number": completed_data.get("身份证号", "")[:6] + "****" if completed_data.get("身份证号") else ""
                 }
-
+                
+                # 保存员工详情数据（用于后续编辑）
+                if "employees_details" not in st.session_state:
+                    st.session_state.employees_details = {}
+                st.session_state.employees_details[new_id] = completed_data
+                
+                # 添加到档案
                 archive_id = archive["id"]
                 if archive_id not in st.session_state.employees_data:
                     st.session_state.employees_data[archive_id] = []
                 st.session_state.employees_data[archive_id].append(new_employee)
-
+                
                 st.success(f"员工「{new_employee['name']}」创建成功！")
                 st.session_state.new_employee_stage = "idle"
                 st.session_state.new_employee_uploaded_file = None
