@@ -6,7 +6,7 @@ import uuid
 import shutil
 
 from backend.ocr import ocr_service
-from backend.archive_generator import archive_generator
+from backend.achive_generator import archive_generator
 from backend.models import EmployeeInfo
 
 # 创建 FastAPI 应用
